@@ -20,30 +20,39 @@ async def run_communication_agent(
 ) -> dict:
     log.info("CommunicationAgent started", action=action)
 
-    if action == "draft_slack":
+    # --- 1. IMPROVED DRAFTING LOGIC (Unified for both actions) ---
+    if action in ["draft_slack", "draft_update"]:
         context = kwargs.get("context", "")
         purpose = kwargs.get("purpose", "update")
 
-        # Dynamic token limit based on content size
+        # If it's a plan update, we need to fetch the actual task names
+        if action == "draft_update" and kwargs.get("plan_id"):
+            plan = await queries.get_plan(kwargs.get("plan_id"))
+            tasks = await queries.get_tasks_by_plan(kwargs.get("plan_id"))
+            # Format tasks into a string so the AI actually knows what they are
+            task_list = "\n".join([f"- {t['title']} ({t['status']})" for t in tasks])
+            context = f"Plan: {plan['goal_text']}\nRecent Tasks:\n{task_list}"
+
+        # Dynamic token limit: ensure at least 1500 for those 35+ task lists
         context_length = len(context.split())
-        max_tokens = min(2000, max(800, context_length * 5))
+        max_tokens = max(1500, context_length * 6) 
 
         response = client.models.generate_content(
             model=settings.gemini_flash_model,
-            contents=f"""Draft a complete, professional Slack message. Do NOT truncate or cut off.
+            contents=f"""Draft a complete, professional Slack message. 
+            
+            CRITICAL: Do NOT truncate. You must list ALL tasks provided.
+            
+            Purpose: {purpose}
+            Context: {context}
 
-Purpose: {purpose}
-Context: {context}
-
-Requirements:
-- Start with a relevant emoji and bold title
-- Be specific — include actual task names, numbers, dates from the context
-- Use bullet points for lists
-- If there are tasks, list ALL of them
-- End with a clear next step or call to action
-- Write the COMPLETE message — never stop mid-sentence
-- Ensure the message ends with a proper closing and does not cut off.
-""",
+            Requirements:
+            - Start with a 🚀 bold title
+            - List EVERY task from the context (don't say "and more")
+            - Use clear bullet points
+            - End with a proper closing and next steps
+            - If you run out of room, prioritize a clean sign-off over more data.
+            """,
             config=types.GenerateContentConfig(
                 temperature=0.4,
                 max_output_tokens=max_tokens
@@ -51,71 +60,48 @@ Requirements:
         )
         draft = response.text.strip()
         return {
-            "action": "draft_slack",
+            "action": action,
             "draft": draft,
             "channel": SLACK_CHANNEL,
-            "message": "Slack message drafted — ready to send"
+            "message": f"Slack message drafted via {action}"
         }
     
+    # --- 2. IMPROVED SEND LOGIC (Safety Chunks) ---
     elif action == "send_slack":
         message = kwargs.get("message", "")
         channel = kwargs.get("channel", SLACK_CHANNEL)
 
-        if not message:
-            return {
-                "action": "send_slack",
-                "error": "No message provided",
-                "message": "No message to send"
-            }
+        if not message or len(message) < 5:
+            return {"action": "send_slack", "error": "Message too short or empty"}
 
         try:
-            # Split into chunks of 3000 chars
+            # Slack blocks/text have limits. We split at 3500 chars.
             chunks = []
-            while len(message) > 3000:
-                # Find last newline before 3000
-                split_at = message[:3000].rfind('\n')
-                if split_at == -1:
-                    split_at = 3000
+            while len(message) > 3500:
+                split_at = message[:3500].rfind('\n')
+                if split_at == -1: split_at = 3500
                 chunks.append(message[:split_at])
                 message = message[split_at:].strip()
-            if message:
-                chunks.append(message)
+            if message: chunks.append(message)
 
             ts = None
             for i, chunk in enumerate(chunks):
-                if i == 0:
-                    result = slack_client.chat_postMessage(
-                        channel=channel,
-                        text=chunk,
-                        username="ARIA — AI Chief of Staff",
-                        icon_emoji=":robot_face:"
-                    )
-                    ts = result["ts"]
-                else:
-                    slack_client.chat_postMessage(
-                        channel=channel,
-                        text=chunk,
-                        username="ARIA — AI Chief of Staff",
-                        icon_emoji=":robot_face:",
-                        thread_ts=ts
-                    )
+                # We use the icon and name defined in your ARIA requirements
+                result = slack_client.chat_postMessage(
+                    channel=channel,
+                    text=chunk,
+                    thread_ts=ts if i > 0 else None, # Threading prevents spam
+                    username="ARIA — AI Chief of Staff",
+                    icon_emoji=":robot_face:"
+                )
+                if i == 0: ts = result["ts"]
 
-            log.info("Slack message sent", chunks=len(chunks))
-            return {
-                "action": "send_slack",
-                "channel": channel,
-                "timestamp": ts,
-                "sent": True,
-                "chunks_sent": len(chunks),
-                "message": f"✅ Message sent to Slack ({len(chunks)} part(s))"
-            }
+            return {"action": "send_slack", "sent": True, "chunks": len(chunks)}
+            
         except SlackApiError as e:
             log.error("Slack error", error=str(e))
-            return {
-                "action": "send_slack",
-                "error": str(e.response["error"]),
-                "message": f"Failed: {e.response['error']}"
-            }
+            return {"action": "send_slack", "error": str(e)}
+
 
     elif action == "draft_and_send":
         context = kwargs.get("context", "")
