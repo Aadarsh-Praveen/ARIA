@@ -19,7 +19,7 @@ Try ARIA live: https://aria-frontend-629352210643.us-central1.run.app
 ## What Makes ARIA Different
 
 | Feature | ARIA |
-|---|---|---|
+|---|---|
 | Memory  | Persistent via Vertex AI Memory Bank |
 | Behavior | Proactive — WatchAgent fires autonomously |
 | Database | AlloyDB + pgvector semantic search |
