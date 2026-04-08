@@ -24,23 +24,29 @@ async def run_communication_agent(
         context = kwargs.get("context", "")
         purpose = kwargs.get("purpose", "update")
 
+        # Dynamic token limit based on content size
+        context_length = len(context.split())
+        max_tokens = min(2000, max(500, context_length * 3))
+
         response = client.models.generate_content(
             model=settings.gemini_flash_model,
-            contents=f"""Draft a professional Slack message.
+            contents=f"""Draft a complete, professional Slack message. Do NOT truncate or cut off.
 
 Purpose: {purpose}
 Context: {context}
 
 Requirements:
-- Start with a relevant emoji
-- Be concise and actionable (under 150 words)
-- Use bullet points for key items
-- End with a clear next step
-- Sound like a real team update, not AI-generated
+- Start with a relevant emoji and bold title
+- Be specific — include actual task names, numbers, dates from the context
+- Use bullet points for lists
+- If there are tasks, list ALL of them
+- End with a clear next step or call to action
+- Write the COMPLETE message — never stop mid-sentence
+- Maximum 300 words
 """,
             config=types.GenerateContentConfig(
                 temperature=0.4,
-                max_output_tokens=300
+                max_output_tokens=max_tokens
             )
         )
         draft = response.text.strip()
@@ -50,7 +56,7 @@ Requirements:
             "channel": SLACK_CHANNEL,
             "message": "Slack message drafted — ready to send"
         }
-
+    
     elif action == "send_slack":
         message = kwargs.get("message", "")
         channel = kwargs.get("channel", SLACK_CHANNEL)
@@ -63,26 +69,52 @@ Requirements:
             }
 
         try:
-            result = slack_client.chat_postMessage(
-                channel=channel,
-                text=message,
-                username="ARIA — AI Chief of Staff",
-                icon_emoji=":robot_face:"
-            )
-            log.info("Slack message sent",
-                     channel=channel, ts=result["ts"])
+            # Split into chunks of 3000 chars
+            chunks = []
+            while len(message) > 3000:
+                # Find last newline before 3000
+                split_at = message[:3000].rfind('\n')
+                if split_at == -1:
+                    split_at = 3000
+                chunks.append(message[:split_at])
+                message = message[split_at:].strip()
+            if message:
+                chunks.append(message)
+
+            ts = None
+            for i, chunk in enumerate(chunks):
+                if i == 0:
+                    result = slack_client.chat_postMessage(
+                        channel=channel,
+                        text=chunk,
+                        username="ARIA — AI Chief of Staff",
+                        icon_emoji=":robot_face:"
+                    )
+                    ts = result["ts"]
+                else:
+                    slack_client.chat_postMessage(
+                        channel=channel,
+                        text=chunk,
+                        username="ARIA — AI Chief of Staff",
+                        icon_emoji=":robot_face:",
+                        thread_ts=ts
+                    )
+
+            log.info("Slack message sent", chunks=len(chunks))
             return {
                 "action": "send_slack",
                 "channel": channel,
-                "timestamp": result["ts"],
-                "message": f"✅ Message sent to Slack channel"
+                "timestamp": ts,
+                "sent": True,
+                "chunks_sent": len(chunks),
+                "message": f"✅ Message sent to Slack ({len(chunks)} part(s))"
             }
         except SlackApiError as e:
             log.error("Slack error", error=str(e))
             return {
                 "action": "send_slack",
                 "error": str(e.response["error"]),
-                "message": f"Failed to send: {e.response['error']}"
+                "message": f"Failed: {e.response['error']}"
             }
 
     elif action == "draft_and_send":

@@ -1,15 +1,16 @@
 import { useState, useRef, useEffect } from "react"
 import axios from "axios"
 
-const API = "http://localhost:8000"
+const API = "https://aria-backend-629352210643.us-central1.run.app"
 
 const AGENT_LABELS = {
   PlannerAgent: "Built your project plan",
   TaskAgent: "Organized your tasks",
   MemoryAgent: "Saved to memory",
-  CommunicationAgent: "Drafted team message",
+  CommunicationAgent: "Sent to Slack!",
   WatchAgent: "Checked for urgent issues",
   OrchestratorAgent: "Understood your goal",
+  CalendarAgent: "Scheduled your calendar",
 }
 
 const SUGGESTIONS = [
@@ -18,6 +19,18 @@ const SUGGESTIONS = [
   "What did we decide last week?",
   "Check for urgent issues",
 ]
+
+function formatMessage(text) {
+  if (!text) return ""
+  return text
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.*?)\*/g, "<em>$1</em>")
+    .replace(/`(.*?)`/g, '<code style="background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:4px;font-size:12px;font-family:monospace">$1</code>')
+    .replace(/^(\d+\.\s)/gm, "<br/>$1")
+    .replace(/^(\*\s)/gm, "<br/>• ")
+    .replace(/\n\n/g, "<br/><br/>")
+    .replace(/\n/g, "<br/>")
+}
 
 function TypingIndicator() {
   return (
@@ -35,11 +48,21 @@ function TypingIndicator() {
   )
 }
 
-function ActionBadge({ label }) {
+function ActionBadge({ label, status }) {
+  const isError = status === "error"
   return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 12px", background: "rgba(0,165,114,0.1)", border: "1px solid rgba(0,165,114,0.2)", borderRadius: 100 }}>
-      <span style={{ color: "#4edea3", fontSize: 13 }} className="material-symbols-outlined">check_circle</span>
-      <span style={{ fontSize: 10, fontWeight: 700, color: "#6ffbbe", textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</span>
+    <div style={{
+      display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 12px",
+      background: isError ? "rgba(255,70,70,0.1)" : "rgba(0,165,114,0.1)",
+      border: `1px solid ${isError ? "rgba(255,70,70,0.2)" : "rgba(0,165,114,0.2)"}`,
+      borderRadius: 100
+    }}>
+      <span style={{ color: isError ? "#ff6b6b" : "#4edea3", fontSize: 13 }} className="material-symbols-outlined">
+        {isError ? "error" : "check_circle"}
+      </span>
+      <span style={{ fontSize: 10, fontWeight: 700, color: isError ? "#ff9999" : "#6ffbbe", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+        {label}
+      </span>
     </div>
   )
 }
@@ -56,7 +79,10 @@ function UserMessage({ text, time }) {
 }
 
 function AssistantMessage({ text, actions, time }) {
-  const labels = actions?.map(a => AGENT_LABELS[a.agent] || a.summary).filter(Boolean) || []
+  const labels = actions?.map(a => ({
+    label: AGENT_LABELS[a.agent] || a.summary,
+    status: a.status
+  })).filter(Boolean) || []
 
   return (
     <div style={{ display: "flex", alignItems: "flex-start", gap: 16, maxWidth: "90%" }}>
@@ -64,12 +90,13 @@ function AssistantMessage({ text, actions, time }) {
         <span style={{ color: "#c0c1ff", fontWeight: 900, fontSize: 18 }}>A</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ background: "#19202D", padding: "16px 24px", borderRadius: "18px 18px 18px 0", border: "1px solid rgba(70,69,84,0.1)", fontSize: 14, lineHeight: 1.7, color: "rgba(220,226,245,0.9)" }}>
-          {text}
-        </div>
+        <div
+          style={{ background: "#19202D", padding: "16px 24px", borderRadius: "18px 18px 18px 0", border: "1px solid rgba(70,69,84,0.1)", fontSize: 14, lineHeight: 1.8, color: "rgba(220,226,245,0.9)" }}
+          dangerouslySetInnerHTML={{ __html: formatMessage(text) }}
+        />
         {labels.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {labels.map((label, i) => <ActionBadge key={i} label={label} />)}
+            {labels.map((item, i) => <ActionBadge key={i} label={item.label} status={item.status} />)}
           </div>
         )}
         <span style={{ fontSize: 10, color: "rgba(199,196,215,0.4)", marginLeft: 4 }}>{time}</span>
@@ -81,7 +108,12 @@ function AssistantMessage({ text, actions, time }) {
 function TimelineItem({ text, sub, done }) {
   return (
     <div style={{ position: "relative", paddingLeft: 24 }}>
-      <div style={{ position: "absolute", left: -17, top: 2, width: 14, height: 14, borderRadius: "50%", background: done ? "#4edea3" : "#19202D", border: "2px solid #19202D", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{
+        position: "absolute", left: -17, top: 2, width: 14, height: 14, borderRadius: "50%",
+        background: done ? "#4edea3" : "#19202D",
+        border: `2px solid ${done ? "#4edea3" : "rgba(70,69,84,0.4)"}`,
+        display: "flex", alignItems: "center", justifyContent: "center"
+      }}>
         {done && <span style={{ color: "#003824", fontSize: 9, fontWeight: 900 }} className="material-symbols-outlined">check</span>}
       </div>
       <div style={{ display: "flex", flexDirection: "column" }}>
@@ -103,7 +135,6 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState(null)
   const [timeline, setTimeline] = useState([])
-  const [watchResult, setWatchResult] = useState(null)
   const [watchLoading, setWatchLoading] = useState(false)
   const bottomRef = useRef(null)
 
@@ -134,7 +165,7 @@ export default function App() {
     setInput("")
     setMessages(prev => [...prev, { role: "user", text: msg, actions: [], time: now() }])
     setLoading(true)
-    setTimeline([{ text: "Understood your goal", sub: msg.slice(0, 30) + "...", done: true }])
+    setTimeline([{ text: "Understood your goal", sub: msg.slice(0, 35) + "...", done: true }])
 
     try {
       const res = await axios.post(`${API}/chat`, {
@@ -145,11 +176,11 @@ export default function App() {
 
       const actions = res.data.agent_actions || []
       const newTimeline = [
-        { text: "Understood your goal", sub: msg.slice(0, 30) + "...", done: true },
+        { text: "Understood your goal", sub: msg.slice(0, 35) + "...", done: true },
         ...actions.map(a => ({
-          text: AGENT_LABELS[a.agent] || a.summary,
-          sub: a.status === "success" ? "Completed" : a.status,
-          done: a.status === "success"
+          text: AGENT_LABELS[a.agent] || a.agent,
+          sub: a.status === "success" ? "Completed ✓" : a.status === "triggered" ? "Triggered !" : "Error",
+          done: a.status === "success" || a.status === "triggered"
         }))
       ]
       setTimeline(newTimeline)
@@ -164,7 +195,7 @@ export default function App() {
     } catch {
       setMessages(prev => [...prev, {
         role: "assistant",
-        text: "Something went wrong. Please try again.",
+        text: "Something went wrong connecting to ARIA. Please try again.",
         actions: [],
         time: now()
       }])
@@ -176,16 +207,19 @@ export default function App() {
     setWatchLoading(true)
     try {
       const res = await axios.get(`${API}/watch/trigger`)
-      setWatchResult(res.data)
       const msg = res.data.triggered > 0
-        ? `I found ${res.data.triggered} item(s) that need your attention: ${res.data.message}`
-        : "All clear! No urgent issues detected. Your schedule and tasks are on track."
+        ? `⚠️ I found **${res.data.triggered} urgent item(s)** that need your attention!\n\n${res.data.results?.map(r => `• ${r.message}`).join("\n") || res.data.message}`
+        : "✅ **All clear!** No urgent issues detected. Your schedule and tasks are on track."
       setMessages(prev => [...prev, {
         role: "assistant",
         text: msg,
-        actions: [{ agent: "WatchAgent", status: "success", summary: res.data.message }],
+        actions: [{ agent: "WatchAgent", status: res.data.triggered > 0 ? "triggered" : "success", summary: res.data.message }],
         time: now()
       }])
+      setTimeline([
+        { text: "Understood your goal", sub: "Proactive check...", done: true },
+        { text: "Checked for urgent issues", sub: res.data.triggered > 0 ? `${res.data.triggered} trigger(s) fired` : "All clear", done: true }
+      ])
     } catch {}
     setWatchLoading(false)
   }
@@ -213,16 +247,16 @@ export default function App() {
         </div>
 
         <div style={{ flex: 1, padding: "0 16px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 24 }}>
-
           <div style={{ height: 1, background: "rgba(70,69,84,0.15)" }} />
 
           <div>
             <p style={{ fontSize: 10, fontWeight: 700, color: "rgba(199,196,215,0.5)", textTransform: "uppercase", letterSpacing: "0.15em", marginBottom: 10, padding: "0 8px" }}>Try asking ARIA:</p>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {SUGGESTIONS.map((s, i) => (
-                <button key={i} onClick={() => sendMessage(s)} style={{ textAlign: "left", padding: "8px 14px", fontSize: 12, color: "rgba(199,196,215,0.7)", background: "#19202D", borderRadius: 100, border: "1px solid rgba(70,69,84,0.15)", cursor: "pointer", transition: "all 0.2s", lineHeight: 1.4 }}
-                  onMouseEnter={e => { e.target.style.color = "#dce2f5"; e.target.style.borderColor = "rgba(192,193,255,0.3)" }}
-                  onMouseLeave={e => { e.target.style.color = "rgba(199,196,215,0.7)"; e.target.style.borderColor = "rgba(70,69,84,0.15)" }}>
+                <button key={i} onClick={() => sendMessage(s)}
+                  style={{ textAlign: "left", padding: "8px 14px", fontSize: 12, color: "rgba(199,196,215,0.7)", background: "#19202D", borderRadius: 100, border: "1px solid rgba(70,69,84,0.15)", cursor: "pointer", transition: "all 0.2s", lineHeight: 1.4 }}
+                  onMouseEnter={e => { e.currentTarget.style.color = "#dce2f5"; e.currentTarget.style.borderColor = "rgba(192,193,255,0.3)" }}
+                  onMouseLeave={e => { e.currentTarget.style.color = "rgba(199,196,215,0.7)"; e.currentTarget.style.borderColor = "rgba(70,69,84,0.15)" }}>
                   {s}
                 </button>
               ))}
@@ -239,7 +273,9 @@ export default function App() {
               ].map(item => (
                 <div key={item.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span style={{ fontSize: 12, color: "rgba(199,196,215,0.6)" }}>{item.label}</span>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: item.color }}>{String(item.value).padStart(2, "0")}</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: item.color }}>
+                    {String(item.value ?? "0").padStart(2, "0")}
+                  </span>
                 </div>
               ))}
             </div>
@@ -247,7 +283,8 @@ export default function App() {
         </div>
 
         <div style={{ padding: 16 }}>
-          <button onClick={runProactiveCheck} disabled={watchLoading} style={{ width: "100%", padding: "12px", background: "rgba(255,180,171,0.08)", border: "1px solid rgba(255,180,171,0.2)", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, color: "#ffb4ab", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", cursor: "pointer" }}>
+          <button onClick={runProactiveCheck} disabled={watchLoading}
+            style={{ width: "100%", padding: "12px", background: "rgba(255,180,171,0.08)", border: "1px solid rgba(255,180,171,0.2)", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, color: "#ffb4ab", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", cursor: watchLoading ? "not-allowed" : "pointer" }}>
             <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#ffb4ab", animation: "pulseRed 2s infinite" }} />
             {watchLoading ? "Checking..." : "Run Proactive Check"}
           </button>
@@ -285,7 +322,7 @@ export default function App() {
 
         <div style={{ padding: "0 32px 32px" }}>
           <div style={{ maxWidth: 800, margin: "0 auto" }}>
-            <div style={{ position: "relative", display: "flex", alignItems: "center", background: "rgba(46,53,67,0.5)", backdropFilter: "blur(20px)", borderRadius: 100, border: "1px solid rgba(70,69,84,0.2)", padding: "8px 8px 8px 24px", transition: "border-color 0.2s" }}>
+            <div style={{ display: "flex", alignItems: "center", background: "rgba(46,53,67,0.5)", backdropFilter: "blur(20px)", borderRadius: 100, border: "1px solid rgba(70,69,84,0.2)", padding: "8px 8px 8px 24px" }}>
               <input
                 value={input}
                 onChange={e => setInput(e.target.value)}
@@ -293,7 +330,8 @@ export default function App() {
                 placeholder="Ask ARIA anything..."
                 style={{ flex: 1, background: "transparent", border: "none", outline: "none", fontSize: 14, color: "#dce2f5", padding: "8px 0" }}
               />
-              <button onClick={() => sendMessage()} disabled={loading || !input.trim()} style={{ width: 44, height: 44, borderRadius: "50%", background: !loading && input.trim() ? "linear-gradient(135deg, #c0c1ff, #8083ff)" : "rgba(70,69,84,0.3)", border: "none", cursor: !loading && input.trim() ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s", flexShrink: 0 }}>
+              <button onClick={() => sendMessage()} disabled={loading || !input.trim()}
+                style={{ width: 44, height: 44, borderRadius: "50%", background: !loading && input.trim() ? "linear-gradient(135deg, #c0c1ff, #8083ff)" : "rgba(70,69,84,0.3)", border: "none", cursor: !loading && input.trim() ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 <span style={{ color: !loading && input.trim() ? "#07006c" : "rgba(199,196,215,0.3)", fontSize: 18 }} className="material-symbols-outlined">send</span>
               </button>
             </div>
@@ -333,7 +371,9 @@ export default function App() {
             <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <svg width={96} height={96} style={{ transform: "rotate(-90deg)" }}>
                 <circle cx={48} cy={48} r={40} fill="transparent" stroke="rgba(70,69,84,0.3)" strokeWidth={8} />
-                <circle cx={48} cy={48} r={40} fill="transparent" stroke="#c0c1ff" strokeWidth={8} strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" style={{ transition: "stroke-dashoffset 0.5s ease" }} />
+                <circle cx={48} cy={48} r={40} fill="transparent" stroke="#c0c1ff" strokeWidth={8}
+                  strokeDasharray={circumference} strokeDashoffset={offset}
+                  strokeLinecap="round" style={{ transition: "stroke-dashoffset 0.5s ease" }} />
               </svg>
               <div style={{ position: "absolute", display: "flex", flexDirection: "column", alignItems: "center" }}>
                 <span style={{ fontSize: 20, fontWeight: 900, color: "#dce2f5" }}>{progressPct}%</span>
@@ -368,6 +408,8 @@ export default function App() {
         @keyframes pulseGreen { 0% { box-shadow: 0 0 0 0 rgba(78,222,163,0.5); } 70% { box-shadow: 0 0 0 8px rgba(78,222,163,0); } 100% { box-shadow: 0 0 0 0 rgba(78,222,163,0); } }
         @keyframes pulseRed { 0% { box-shadow: 0 0 0 0 rgba(255,180,171,0.5); } 70% { box-shadow: 0 0 0 8px rgba(255,180,171,0); } 100% { box-shadow: 0 0 0 0 rgba(255,180,171,0); } }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        strong { color: #e8e8ff; font-weight: 700; }
+        em { color: #c0c1ff; font-style: italic; }
       `}</style>
     </div>
   )
