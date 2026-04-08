@@ -18,14 +18,14 @@ Try ARIA live: https://aria-frontend-629352210643.us-central1.run.app
 
 ## What Makes ARIA Different
 
-| Feature | Other Submissions | ARIA |
+| Feature | ARIA |
 |---|---|---|
-| Memory | Resets every session | Persistent via Vertex AI Memory Bank |
-| Behavior | Reactive only | Proactive — WatchAgent fires autonomously |
-| Database | Simple key-value | AlloyDB + pgvector semantic search |
-| Integrations | Simulated | Real Google Calendar + Real Slack |
-| MCP | None or basic | Custom Task MCP Server + 3 integrations |
-| Demo scope | Add a task | Full project launch in 60 seconds |
+| Memory  | Persistent via Vertex AI Memory Bank |
+| Behavior | Proactive — WatchAgent fires autonomously |
+| Database | AlloyDB + pgvector semantic search |
+| Integrations | Real Google Calendar + Real Slack |
+| MCP  | Custom Task MCP Server + 3 integrations |
+| Demo scope  | Full project launch in 60 seconds |
 
 ---
 
