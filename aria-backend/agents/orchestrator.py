@@ -14,106 +14,22 @@ client = genai.Client(api_key=settings.gemini_api_key)
 
 
 async def route_message(message: str) -> list[str]:
-    """Hybrid routing — keyword check first, then AI for ambiguous cases."""
-    
-    msg = message.lower()
-    
-    # Hard keyword overrides — these always win
-    memory_triggers = [
-        "decide", "decided", "decision", "pricing", "price",
-        "tech stack", "technology", "remember", "recall", "what did we",
-        "what was", "agreed", "agreement", "budget", "team size",
-        "how many people", "what is our", "our stack", "our tech",
-        "history", "past", "previous", "last week", "last month",
-        "stored", "noted", "recorded", "what have we", "tell me about our"
-    ]
-    
-    plan_triggers = [
-        "plan", "launch", "roadmap", "milestone", "project",
-        "create a plan", "organize", "kick off", "get started with",
-        "help me build", "break down", "strategy for"
-    ]
-    
-    list_triggers = [
-        "list", "show me my tasks", "show all", "display",
-        "all tasks", "my tasks", "what tasks", "give me tasks",
-        "fetch tasks", "retrieve tasks"
-    ]
-    
-    watch_triggers_kw = [
-        "urgent", "conflict", "overdue", "alert", "check for issues",
-        "proactive", "deadline", "at risk", "blocked", "behind"
-    ]
-    
-    comm_triggers = [
-        "slack", "notify", "tell the team", "send message",
-        "draft message", "communicate", "email team"
-    ]
-    
-    calendar_triggers = [
-        "schedule my", "plan my day", "plan my week", "calendar",
-        "time slot", "book time", "when should i work"
-    ]
-    
-    # Check hard keywords first
-    if any(k in msg for k in memory_triggers):
-        return ["memory_recall"]
-    
-    if any(k in msg for k in plan_triggers):
-        # Also check if they want tasks after planning
-        if any(k in msg for k in ["and show", "and list", "then show"]):
-            return ["planner", "task_get"]
-        return ["planner"]
-    
-    if any(k in msg for k in list_triggers):
-        return ["task_get"]
-    
-    if any(k in msg for k in watch_triggers_kw):
-        return ["watch", "task_get"]
-    
-    if any(k in msg for k in comm_triggers):
-        return ["communication_draft"]
-    
-    if any(k in msg for k in calendar_triggers):
-        return ["calendar_schedule", "task_get"]
-    
-    # For ambiguous messages, use AI routing
-    routing_prompt = f"""You are a routing system for ARIA.
-
-Message: "{message}"
-
-Return ONLY a JSON array. Options:
-- "task_get" — list/show tasks
-- "task_summarize" — summarize progress  
-- "planner" — create new plan
-- "memory_recall" — past decisions/history
-- "communication_draft" — send message
-- "calendar_schedule" — scheduling
-- "watch" — urgent alerts
-
-Default: ["task_get"]
-Return JSON only."""
-
+    """Embedding-based intent classification — accurate and flexible."""
     try:
-        response = client.models.generate_content(
-            model=settings.gemini_flash_model,
-            contents=routing_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.0,
-                max_output_tokens=30
-            )
-        )
-        raw = response.text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
-        agents = json.loads(raw)
-        log.info("AI routing", message=message[:40], agents=agents)
+        from agents.router import classify_intent
+        agents = await classify_intent(message)
+        log.info("Embedding routing", message=message[:40], agents=agents)
         return agents
     except Exception as e:
-        log.error("Routing error", error=str(e))
+        log.error("Embedding routing failed, using fallback", error=str(e))
+        # Fallback to simple keyword check
+        msg = message.lower()
+        if any(k in msg for k in ["slack", "notify", "send", "tell team", "message team"]):
+            return ["communication_draft"]
+        if any(k in msg for k in ["decide", "decided", "pricing", "remember", "recall"]):
+            return ["memory_recall"]
+        if any(k in msg for k in ["urgent", "conflict", "overdue", "alert"]):
+            return ["watch", "task_get"]
         return ["task_get"]
 
 def build_detailed_context(results: dict) -> str:
@@ -153,8 +69,9 @@ def build_detailed_context(results: dict) -> str:
     if "memory" in results:
         answer = results["memory"].get("answer", "")
         searched = results["memory"].get("memories_searched", 0)
+        source = results["memory"].get("source", "memory")
         if answer:
-            ctx += f"\n\nRecalled from memory ({searched} memories searched):\n{answer}"
+            ctx += f"\n\nRecalled from {source} ({searched} memories searched):\n{answer}"
         else:
             ctx += "\n\nNo relevant past decisions found."
 
@@ -185,8 +102,10 @@ def build_detailed_context(results: dict) -> str:
 
     if "communication" in results:
         draft = results["communication"].get("draft", "")
+        sent = results["communication"].get("sent", False)
         if draft:
-            ctx += f"\n\nDrafted Slack message:\n---\n{draft}\n---"
+            status = "SENT to Slack ✅" if sent else "Drafted"
+            ctx += f"\n\nSlack message [{status}]:\n---\n{draft}\n---"
 
     return ctx
 
@@ -208,11 +127,11 @@ async def run_orchestrator(
         log.error("Memory load error", error=str(e))
         memory_context = {}
 
-    # Step 2: AI-powered routing
+    # Step 2: Route message
     agents_to_call = await route_message(user_message)
     log.info("Routing decision", agents=agents_to_call)
 
-    # Step 3: Execute each agent
+    # Step 3: Execute agents
     results = {}
     agent_actions = []
 
@@ -231,9 +150,7 @@ async def run_orchestrator(
                 })
 
             elif agent == "task_get":
-                result = await run_task_agent(
-                    "get_tasks", user_id=user_id
-                )
+                result = await run_task_agent("get_tasks", user_id=user_id)
                 results["tasks"] = result
                 agent_actions.append({
                     "agent": "TaskAgent",
@@ -242,9 +159,7 @@ async def run_orchestrator(
                 })
 
             elif agent == "task_summarize":
-                result = await run_task_agent(
-                    "summarize", user_id=user_id
-                )
+                result = await run_task_agent("summarize", user_id=user_id)
                 results["task_summary"] = result
                 agent_actions.append({
                     "agent": "TaskAgent",
@@ -263,17 +178,26 @@ async def run_orchestrator(
                 agent_actions.append({
                     "agent": "MemoryAgent",
                     "status": "success",
-                    "summary": f"Searched {result.get('memories_searched', 0)} memories"
+                    "summary": f"Recalled from {result.get('source', 'memory')} — {result.get('memories_searched', 0)} memories searched"
                 })
 
             elif agent == "communication_draft":
-                context_str = user_message
-                if "planner" in results:
-                    context_str = results["planner"].get(
-                        "message", user_message
-                    )
+                # Get task context to include in message
+                task_context = ""
+                if "tasks" not in results:
+                    task_result = await run_task_agent("get_tasks", user_id=user_id)
+                    results["tasks"] = task_result
+                    task_list = task_result.get("tasks", [])
+                    task_context = "\n".join([
+                        f"{i+1}. [{t['priority'].upper()}] {t['title']} — Due: {t.get('due_date', 'TBD')}"
+                        for i, t in enumerate(task_list[:15])
+                    ])
+
+                context_str = f"User request: {user_message}\n\nCurrent tasks:\n{task_context}" if task_context else user_message
+
+                # Always send to Slack when communication agent is triggered
                 result = await run_communication_agent(
-                    "draft_slack",
+                    "draft_and_send",
                     user_id=user_id,
                     context=context_str,
                     purpose=f"Team update: {user_message}"
@@ -282,7 +206,7 @@ async def run_orchestrator(
                 agent_actions.append({
                     "agent": "CommunicationAgent",
                     "status": "success",
-                    "summary": "Drafted Slack message for team"
+                    "summary": "✅ Slack message sent to team!"
                 })
 
             elif agent == "calendar_schedule":
@@ -322,7 +246,7 @@ async def run_orchestrator(
                 "summary": f"Error: {str(e)[:100]}"
             })
 
-    # Step 4: Save interaction to memory
+    # Step 4: Save to memory
     try:
         await run_memory_agent(
             "save",
@@ -335,13 +259,12 @@ async def run_orchestrator(
     except Exception as e:
         log.error("Memory save error", error=str(e))
 
-    # Step 5: Build detailed context
+    # Step 5: Build context and generate response
     detailed_context = build_detailed_context(results)
     results_summary = "\n".join([
         f"- {a['agent']}: {a['summary']}" for a in agent_actions
     ])
 
-    # Step 6: Generate final response
     final_prompt = f"""You are ARIA, a friendly and highly capable AI chief of staff.
 
 User said: "{user_message}"
@@ -352,31 +275,25 @@ What your agents did:
 Complete data retrieved:
 {detailed_context}
 
-CRITICAL RULES — follow exactly:
-1. LISTING TASKS: If user asked to list/show/display tasks → show ALL tasks:
-   📋 Here are your [N] tasks:
-   1. [HIGH] Task name — Due: YYYY-MM-DD — Status: pending
-   2. [MEDIUM] Task name — Due: YYYY-MM-DD — Status: pending
-   List EVERY task. Never skip any.
+CRITICAL RULES:
+1. TASKS: If user asked to list tasks → show ALL tasks numbered:
+   1. [HIGH] Task name — Due: date — Milestone: name
+   Never skip any task.
 
-2. PLANNING: If a plan was created → mention exact plan title, all
-   milestone names, total tasks, deadline.
+2. PLANNING: If plan created → mention title, all milestones, task count, deadline.
 
-3. MEMORY: If user asked about past decisions → give the EXACT recalled
-   answer with specific numbers and dates.
-   If nothing found → say "I don't have a record of that yet."
+3. MEMORY: Give EXACT recalled answer with numbers and dates.
+   If nothing found → "I don't have a record of that yet."
 
-4. URGENT ALERTS: If WatchAgent found issues → highlight with ⚠️.
+4. SLACK SENT: If CommunicationAgent sent a message → confirm it was sent
+   and show the full message content clearly.
 
-5. SCHEDULE: If calendar suggested a schedule → show the full schedule.
+5. URGENT: If WatchAgent found issues → highlight with ⚠️.
 
-6. TEAM MESSAGE: If a Slack draft was created → show the full draft.
+6. SCHEDULE: Show the full suggested schedule.
 
-7. SUMMARY: Give specific numbers — pending, completed, high priority.
-
-8. Always be specific. Use ACTUAL data above. Never be vague.
-9. Be friendly, conversational, and well-formatted.
-10. Use emojis sparingly to make responses scannable.
+7. Always be specific. Use actual data. Never be vague.
+8. Be friendly and well-formatted.
 """
 
     final_response = client.models.generate_content(

@@ -17,10 +17,16 @@ log = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    await get_pool()
-    log.info("✅ ARIA Backend started")
+    try:
+        await get_pool()
+        log.info("✅ ARIA Backend started")
+    except Exception as e:
+        log.error("DB connection failed on startup", error=str(e))
+        log.info("✅ ARIA Backend started (without DB)")
+    
     asyncio.create_task(start_watch_loop(interval=300))
     yield
+    
     # Shutdown
     stop_watch_loop()
     await close_pool()
@@ -115,6 +121,39 @@ async def get_status(user_id: str = "user-aadarsh-001"):
         "plans": [{"id": p["id"], "goal": p["goal_text"][:50]} for p in plans[:3]]
     }
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        await get_pool()
+        log.info("✅ ARIA Backend started")
+    except Exception as e:
+        log.error("DB connection failed", error=str(e))
+        log.info("✅ ARIA Backend started (without DB)")
+
+    # Pre-build intent embeddings for fast routing
+    try:
+        from agents.router import build_intent_embeddings
+        await build_intent_embeddings()
+        log.info("✅ Intent embeddings ready")
+    except Exception as e:
+        log.error("Embedding build failed", error=str(e))
+
+    asyncio.create_task(start_watch_loop(interval=300))
+    yield
+
+    stop_watch_loop()
+    await close_pool()
+    log.info("ARIA Backend stopped")
+
+@app.post("/task/complete")
+async def complete_task(task_title: str, user_id: str = "user-aadarsh-001"):
+    from db.queries import get_tasks, update_task_status
+    tasks = await get_tasks(user_id=user_id)
+    for task in tasks:
+        if task_title.lower() in task["title"].lower():
+            await update_task_status(task["id"], "completed")
+            return {"message": f"Task '{task['title']}' marked as completed!"}
+    return {"message": "Task not found"}
 
 if __name__ == "__main__":
     uvicorn.run(
