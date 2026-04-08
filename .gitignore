@@ -1,0 +1,16 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+service-account.json
+credentials.json
+token.pickle
+cloud-sql-proxy
+alloydb-auth-proxy
+node_modules/
+dist/
+.DS_Store
+*.egg-info/
+.venv/
+*.log
