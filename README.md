@@ -1,7 +1,6 @@
-```markdown
 # ARIA — Adaptive Role-based Intelligence Assistant
 
-> **Google Gen AI Academy APAC Hackathon 2026** | Track: Multi-Agent Productivity Assistant
+## Track: Multi-Agent Productivity Assistant
 
 ARIA is a self-organizing multi-agent AI system where an OrchestratorAgent powered by Gemini 2.5 Pro coordinates 6 specialized sub-agents to manage tasks, schedules, and information autonomously across Slack, Google Calendar, and a custom AlloyDB-backed task system. It learns from every session via Vertex AI Memory Bank and acts proactively without being prompted.
 
@@ -276,4 +275,3 @@ Most AI assistants are purely reactive. WatchAgent polls every 5 minutes and fir
 Aadarsh Praveen — Google Gen AI Academy APAC Hackathon 2026
 
 ARIA is not a smarter chatbot. It is the missing coordination layer between you and your tools — one that works while you sleep.
-```
