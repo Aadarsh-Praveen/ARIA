@@ -26,7 +26,7 @@ async def run_communication_agent(
 
         # Dynamic token limit based on content size
         context_length = len(context.split())
-        max_tokens = min(2000, max(500, context_length * 3))
+        max_tokens = min(2000, max(800, context_length * 5))
 
         response = client.models.generate_content(
             model=settings.gemini_flash_model,
@@ -42,7 +42,7 @@ Requirements:
 - If there are tasks, list ALL of them
 - End with a clear next step or call to action
 - Write the COMPLETE message — never stop mid-sentence
-- Maximum 300 words
+- Ensure the message ends with a proper closing and does not cut off.
 """,
             config=types.GenerateContentConfig(
                 temperature=0.4,
@@ -161,7 +161,7 @@ Requirements:
             contents=f"Write a brief team update Slack message for: {context}",
             config=types.GenerateContentConfig(
                 temperature=0.4,
-                max_output_tokens=200
+                max_output_tokens=1000
             )
         )
         return {
